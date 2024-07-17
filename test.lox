@@ -1,0 +1,10 @@
+// comment
+name = "binary"
+age = 26
+nextAge = age + 1
+is27 = nextAge == 27
+alternateIs27 = (age + 1) == 27
+
+if (is27) {
+} else {
+}
