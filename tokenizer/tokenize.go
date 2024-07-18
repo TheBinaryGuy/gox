@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"unicode"
 )
 
 type TokenType int
@@ -157,10 +158,10 @@ func Tokenize(fileContents []byte) ([]Token, error) {
 	parsedTokens := []Token{}
 	errors := []LexingError{}
 
-	currentLine := 0
-	for cursor := 0; cursor < len(fileContents); {
+	for cursor, currentLine := 0, 1; cursor < len(fileContents); {
 		token := fileContents[cursor]
 		cursor++
+
 		if token == '\n' {
 			currentLine++
 			continue
@@ -214,7 +215,7 @@ func Tokenize(fileContents []byte) ([]Token, error) {
 			start := cursor
 			end := bytes.Index(fileContents[start:], []byte{'"'})
 			if end == -1 {
-				error := LexingError{currentLine + 1, "Unterminated string", ""}
+				error := LexingError{currentLine, "Unterminated string", ""}
 				errors = append(errors, error)
 				fmt.Fprintln(os.Stderr, error)
 				cursor = len(fileContents)
@@ -230,69 +231,19 @@ func Tokenize(fileContents []byte) ([]Token, error) {
 
 			cursor += end + 1
 		default:
-			if token >= '0' && token <= '9' {
-				start := cursor - 1
-				dotSeen := false
-				for cursor < len(fileContents) &&
-					(fileContents[cursor] >= '0' &&
-						fileContents[cursor] <= '9' ||
-						fileContents[cursor] == '.') {
-					if fileContents[cursor] == '.' && dotSeen {
-						break
-					}
+			var ok bool
 
-					if fileContents[cursor] == '.' {
-						dotSeen = true
-					}
-
-					cursor++
-				}
-
-				if fileContents[cursor-1] == '.' {
-					cursor--
-					dotSeen = false
-				}
-
-				lexeme := string(fileContents[start:cursor])
-
-				num, err := strconv.ParseFloat(lexeme, 64)
-				if err != nil {
-					error := LexingError{currentLine + 1, "Invalid number", lexeme}
-					errors = append(errors, error)
-					fmt.Fprintln(os.Stderr, error)
-					break
-				}
-
-				numberToken := tokens[NUMBER]
-				numberToken.lexeme = lexeme
-				numberToken.literal = formatFloat(num)
-				parsedTokens = append(parsedTokens, numberToken)
+			cursor, parsedTokens, errors, ok = lexNumber(token, cursor, currentLine, fileContents, parsedTokens, errors)
+			if ok {
 				break
 			}
 
-			if (token >= 'a' && token <= 'z') || (token >= 'A' && token <= 'Z') || token == '_' {
-				start := cursor - 1
-				for cursor < len(fileContents) &&
-					((fileContents[cursor] >= 'a' && fileContents[cursor] <= 'z') ||
-						(fileContents[cursor] >= 'A' && fileContents[cursor] <= 'Z') ||
-						(fileContents[cursor] >= '0' && fileContents[cursor] <= '9') ||
-						fileContents[cursor] == '_') {
-					cursor++
-				}
-
-				token, ok := reserved[string(fileContents[start:cursor])]
-				if ok {
-					parsedTokens = append(parsedTokens, token)
-					break
-				}
-
-				identifierToken := tokens[IDENTIFIER]
-				identifierToken.lexeme = string(fileContents[start:cursor])
-				parsedTokens = append(parsedTokens, identifierToken)
+			cursor, parsedTokens, errors, ok = lexString(token, cursor, fileContents, parsedTokens, errors)
+			if ok {
 				break
 			}
 
-			error := LexingError{currentLine + 1, "Unexpected character", string(token)}
+			error := LexingError{currentLine, "Unexpected character", string(token)}
 			errors = append(errors, error)
 			fmt.Fprintln(os.Stderr, error)
 		}
@@ -305,4 +256,74 @@ func Tokenize(fileContents []byte) ([]Token, error) {
 	}
 
 	return parsedTokens, nil
+}
+
+func lexNumber(token byte, cursor int, currentLine int, fileContents []byte, parsedTokens []Token, errors []LexingError) (int, []Token, []LexingError, bool) {
+	if !unicode.IsDigit(rune(token)) {
+		return cursor, parsedTokens, errors, false
+	}
+
+	start := cursor - 1
+	dotSeen := false
+	for cursor < len(fileContents) &&
+		(fileContents[cursor] >= '0' &&
+			fileContents[cursor] <= '9' ||
+			fileContents[cursor] == '.') {
+		if fileContents[cursor] == '.' && dotSeen {
+			break
+		}
+
+		if fileContents[cursor] == '.' {
+			dotSeen = true
+		}
+
+		cursor++
+	}
+
+	if fileContents[cursor-1] == '.' {
+		cursor--
+		dotSeen = false
+	}
+
+	lexeme := string(fileContents[start:cursor])
+
+	num, err := strconv.ParseFloat(lexeme, 64)
+	if err != nil {
+		error := LexingError{currentLine, "Invalid number", lexeme}
+		errors = append(errors, error)
+		fmt.Fprintln(os.Stderr, error)
+		return cursor, parsedTokens, errors, false
+	}
+
+	numberToken := tokens[NUMBER]
+	numberToken.lexeme = lexeme
+	numberToken.literal = formatFloat(num)
+	parsedTokens = append(parsedTokens, numberToken)
+	return cursor, parsedTokens, errors, true
+}
+
+func lexString(token byte, cursor int, fileContents []byte, parsedTokens []Token, errors []LexingError) (int, []Token, []LexingError, bool) {
+	if !unicode.IsLetter(rune(token)) && token != '_' {
+		return cursor, parsedTokens, errors, false
+	}
+
+	start := cursor - 1
+	for cursor < len(fileContents) &&
+		((fileContents[cursor] >= 'a' && fileContents[cursor] <= 'z') ||
+			(fileContents[cursor] >= 'A' && fileContents[cursor] <= 'Z') ||
+			(fileContents[cursor] >= '0' && fileContents[cursor] <= '9') ||
+			fileContents[cursor] == '_') {
+		cursor++
+	}
+
+	reservedToken, ok := reserved[string(fileContents[start:cursor])]
+	if ok {
+		parsedTokens = append(parsedTokens, reservedToken)
+		return cursor, parsedTokens, errors, true
+	}
+
+	identifierToken := tokens[IDENTIFIER]
+	identifierToken.lexeme = string(fileContents[start:cursor])
+	parsedTokens = append(parsedTokens, identifierToken)
+	return cursor, parsedTokens, errors, true
 }
